@@ -126,8 +126,8 @@ export function unipusNext(
 	if (mode === 'manually') return undefined;
 	const micros = Array.from(doc.querySelectorAll<HTMLElement>('.pc-slider-menu-micro'));
 	const index = micros.findIndex((micro) => micro.classList.contains('pc-menu-activity'));
-	const currentFinished = index >= 0 && unipusMicroFinished(micros[index]) === true;
-	for (const [selector, activeClass] of nextMicro || (mode === 'job' && currentFinished)
+	// 目录进度不能代替当前板块各页签的状态，先走完练习和页签再选择目录任务。
+	for (const [selector, activeClass] of nextMicro
 		? []
 		: [
 				['.pc-header-tasks-row .pc-task', 'pc-header-task-activity'],
@@ -153,6 +153,18 @@ export function unipusNext(
 /** 提交后的操作按钮出现时才允许离开，确认弹窗和仍可提交的页面继续等待。 */
 export function unipusWorkSubmitted(doc: Document) {
 	if (doc.querySelector('.ant-modal-content')) return false;
+	const content = doc.querySelector('#main-content');
+	if (
+		content &&
+		!content.querySelector(
+			'.option.isNotReview, input:not(:disabled):not([readonly]), textarea:not(:disabled):not([readonly])'
+		)
+	) {
+		const labels = Array.from(content.querySelectorAll('h1, h2, h3, h4, div, span')).map((element) =>
+			element.textContent?.trim()
+		);
+		if (labels.includes('答题小结') && labels.includes('答题情况')) return true;
+	}
 	const text = doc.querySelector('#pc-foot .question-common-course-page .btn')?.textContent?.replace(/\s/g, '');
 	return /^(重新答题|重新作答|重做|再做一次|查看答案|查看解析|已提交)$/.test(text || '');
 }

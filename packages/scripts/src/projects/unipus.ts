@@ -102,7 +102,7 @@ function contentKey(root: HTMLElement) {
 	);
 }
 
-function watchCourseware() {
+export function watchCourseware() {
 	const study = UnipusProject.scripts.study;
 	let mountedRoot: HTMLElement | undefined;
 	let mountedHash = '';
@@ -114,33 +114,25 @@ function watchCourseware() {
 	let mountedRequired: boolean | undefined;
 	const excludedMicros = new Set<HTMLElement>();
 	const jumpedPages = new Set<string>();
+	const jumpingPages = new Set<string>();
+	let submittedHash: string | undefined;
+	let submittedContent: { hash: string; element: Element | null } | undefined;
+	let disposed = false;
 
-	const refresh = () => {
-		const root = document.querySelector<HTMLElement>('#main-content .question-abs-question');
-		const tip = document.querySelector('.task_tip');
-		if (!root || (previousKey !== undefined && contentKey(root) === previousKey)) return;
-		if (tip) required = unipusRequired(tip.textContent || '');
-		if (mountedHash === location.hash && mountedRoot === root && mountedRequired === required) return;
-		dispose?.();
-		mountedRoot = root;
-		mountedHash = location.hash;
-		mountedRequired = required;
-		previousKey = undefined;
-		const hash = location.hash;
-		let active = true;
-		const current = () => active && location.hash === hash && root.isConnected;
-		let jumping = false;
-		const navigate = async (nextMicro = false, allowed = () => true) => {
-			if (!current() || jumping) return;
-			if (study.cfg.mode === 'manually') {
-				$message.info('当前内容已结束，自动跳转已关闭，请手动切换。');
-				return;
-			}
-			if (jumpedPages.has(hash)) {
-				$message.warn('重复到达同一课件，请检查未完成内容后手动切换。');
-				return;
-			}
-			jumping = true;
+	// 提交小结会移除题目节点，导航会话只随路由失效，不依附于旧答题器。
+	const navigate = async (hash: string, nextMicro = false, allowed = () => true) => {
+		const current = () => !disposed && location.hash === hash;
+		if (!current() || jumpingPages.has(hash)) return;
+		if (study.cfg.mode === 'manually') {
+			$message.info('当前内容已结束，自动跳转已关闭，请手动切换。');
+			return;
+		}
+		if (jumpedPages.has(hash)) {
+			$message.warn('重复到达同一课件，请检查未完成内容后手动切换。');
+			return;
+		}
+		jumpingPages.add(hash);
+		try {
 			$message.info('当前内容已结束，5秒后按跳转模式继续学习。');
 			await $.sleep(5000);
 			if (!current() || (study.cfg.mode as UnipusJumpMode) === 'manually' || !allowed()) return;
@@ -158,7 +150,43 @@ function watchCourseware() {
 			button.click();
 			await $.sleep(2000);
 			if (current()) $message.warn('页面未发生切换，请手动点击下一任务。');
-		};
+		} finally {
+			jumpingPages.delete(hash);
+		}
+	};
+
+	const refresh = () => {
+		if (disposed) return;
+		if (unipusWorkSubmitted(document)) {
+			const element = document.querySelector('#main-content')?.firstElementChild || null;
+			// 路由先变化、小结后卸载时，不把上一页的小结当成下一页已完成。
+			if (submittedContent && submittedContent.hash !== location.hash && submittedContent.element === element) return;
+			submittedContent = { hash: location.hash, element };
+			dispose?.();
+			dispose = undefined;
+			mountedRoot = undefined;
+			if (submittedHash !== location.hash) {
+				submittedHash = location.hash;
+				navigate(location.hash, false, () => unipusWorkSubmitted(document)).catch((error) =>
+					$console.error('U校园跳转失败：' + String(error))
+				);
+			}
+			return;
+		}
+		const root = document.querySelector<HTMLElement>('#main-content .question-abs-question');
+		const tip = document.querySelector('.task_tip');
+		if (!root || (previousKey !== undefined && contentKey(root) === previousKey)) return;
+		submittedContent = undefined;
+		if (tip) required = unipusRequired(tip.textContent || '');
+		if (mountedHash === location.hash && mountedRoot === root && mountedRequired === required) return;
+		dispose?.();
+		mountedRoot = root;
+		mountedHash = location.hash;
+		mountedRequired = required;
+		previousKey = undefined;
+		const hash = location.hash;
+		let active = true;
+		const current = () => active && location.hash === hash && root.isConnected;
 		dispose = () => {
 			active = false;
 		};
@@ -168,7 +196,7 @@ function watchCourseware() {
 			if (required === false) {
 				const micro = document.querySelector<HTMLElement>('.pc-slider-menu-micro.pc-menu-activity');
 				if (micro) excludedMicros.add(micro);
-				navigate(true).catch((error) => $console.error('U校园跳转失败：' + String(error)));
+				navigate(hash, true, current).catch((error) => $console.error('U校园跳转失败：' + String(error)));
 			}
 			return;
 		}
@@ -183,7 +211,8 @@ function watchCourseware() {
 		};
 		const ended = () => {
 			const hasExercise = root.querySelector('.layout-reply-container, .question-common-abs-reply');
-			if (current() && !hasExercise) navigate().catch((error) => $console.error('U校园跳转失败：' + String(error)));
+			if (current() && !hasExercise)
+				navigate(hash, false, current).catch((error) => $console.error('U校园跳转失败：' + String(error)));
 		};
 		if (media && managedMedia) {
 			updateMedia();
@@ -195,8 +224,7 @@ function watchCourseware() {
 		const disposeWork = unipusQuestionType(root)
 			? commonWork({
 					mount_script: UnipusProject.scripts.work,
-					workerProvider: (opts) =>
-						current() ? createWorker(root, opts, current, (allowed) => navigate(false, allowed)) : undefined
+					workerProvider: (opts) => (current() ? createWorker(root, opts, current) : undefined)
 			  })
 			: undefined;
 		if (!media && !disposeWork) $message.info('当前课件需要手动完成。');
@@ -210,7 +238,9 @@ function watchCourseware() {
 	};
 
 	const schedule = () => {
+		if (disposed) return;
 		if (pendingHash !== location.hash) {
+			submittedHash = undefined;
 			previousKey = mountedRoot?.isConnected ? contentKey(mountedRoot) : undefined;
 			pendingHash = location.hash;
 			required = undefined;
@@ -233,6 +263,8 @@ function watchCourseware() {
 	}
 	study.onConfigChange('mode', () => {
 		jumpedPages.clear();
+		submittedHash = undefined;
+		schedule();
 	});
 	study.onConfigChange('onlyRequired', () => excludedMicros.clear());
 	for (const key of ['volume', 'playbackRate'] as const) {
@@ -245,26 +277,21 @@ function watchCourseware() {
 			media.playbackRate = Number(study.cfg.playbackRate);
 		});
 	}
-	window.addEventListener(
-		'pagehide',
-		() => {
-			clearTimeout(timer);
-			observer.disconnect();
-			window.removeEventListener('hashchange', schedule);
-			window.removeEventListener('popstate', schedule);
-			dispose?.();
-		},
-		{ once: true }
-	);
+	const cleanup = () => {
+		disposed = true;
+		clearTimeout(timer);
+		observer.disconnect();
+		window.removeEventListener('hashchange', schedule);
+		window.removeEventListener('popstate', schedule);
+		window.removeEventListener('pagehide', cleanup);
+		dispose?.();
+	};
+	window.addEventListener('pagehide', cleanup, { once: true });
 	schedule();
+	return cleanup;
 }
 
-function createWorker(
-	root: HTMLElement,
-	opts: CommonWorkOptions,
-	current: () => boolean,
-	onSubmitted: (allowed: () => boolean) => Promise<void>
-) {
+function createWorker(root: HTMLElement, opts: CommonWorkOptions, current: () => boolean) {
 	const type = unipusQuestionType(root);
 	if (!type) return undefined;
 	// 听力题的正文常只有通用指令，带上教材及当前任务名称，避免不同单元命中同一缓存。
@@ -295,7 +322,13 @@ function createWorker(
 	CommonProject.scripts.workResults.methods.init();
 	const worker = new OCSWorker({
 		root: unipusQuestions(root),
-		rootObserver: { enabled: true },
+		rootObserver: {
+			enabled: true,
+			onRootLost: () => {
+				// 提交后进入小结是正常生命周期，导航由课件观察器接管。
+				if (unipusWorkSubmitted(document)) worker.emit('close');
+			}
+		},
 		elements: { title: (node) => [node as HTMLElement], options: (node) => unipusOptions(node as HTMLElement) },
 		thread: opts.thread,
 		answerSeparators: opts.answerSeparators.split(',').map((s) => s.trim()),
@@ -399,15 +432,6 @@ function createWorker(
 					const submit = document.querySelector<HTMLElement>('#pc-foot .question-common-course-page .btn');
 					if (submit?.textContent?.replace(/\s/g, '') !== '提交') return;
 					submit.click();
-					if (!results.length || results.some((result) => !result.result?.finish)) return;
-					for (let attempt = 0; attempt < 50 && current() && !worker.isClose; attempt++) {
-						await $.sleep(200);
-						if (unipusWorkSubmitted(document)) {
-							await onSubmitted(() => !worker.isStop && !worker.isClose);
-							return;
-						}
-					}
-					if (current() && !worker.isClose) $message.info('尚未确认提交成功，请检查页面后手动继续。');
 				}
 			});
 			if (current()) $message.info('本页答题完成，请检查页面结果后继续。');

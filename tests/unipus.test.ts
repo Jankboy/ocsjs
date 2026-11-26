@@ -290,13 +290,101 @@ test('未完成模式跳过已完成、锁定、未知及非必修任务，并�
 	assert.equal(unipusNext(document, false, 'job', excluded), undefined);
 });
 
-test('未完成模式先处理当前任务的后续练习，全部完成的任务直接离开', () => {
+test('未完成模式先处理当前任务的后续练习，不根据目录进度跳过当前页签', () => {
 	page(`<div class="pc-header-tasks-row"><div class="pc-task pc-header-task-activity"></div><div id="exercise" class="pc-task"></div></div>
 		<div class="pc-slider-menu-micro pc-menu-activity"><div id="progress" class="pc-slider-menu-status-circle-half"></div></div>
 		<div id="nextMicro" class="pc-slider-menu-micro"><div class="pc-slider-menu-status-circle-half"></div></div>`);
 	assert.equal(unipusNext(document, false, 'job')?.id, 'exercise');
 	document.querySelector('#progress')!.className = 'pc-slider-menu-status-circle-all';
-	assert.equal(unipusNext(document, false, 'job')?.id, 'nextMicro');
+	assert.equal(unipusNext(document, false, 'job')?.id, 'exercise');
+});
+
+test('顶部页签数量动态变化，逐一选择下一页签，最后才离开板块', () => {
+	for (const count of [1, 2, 3, 5, 7]) {
+		for (let active = 0; active < count; active++) {
+			page(`<div class="pc-tab-row">${Array.from(
+				{ length: count },
+				(_, index) => `<div id="tab-${index}" class="tab ${index === active ? 'pc-header-tab-activity' : ''}"></div>`
+			).join(
+				''
+			)}</div><div class="pc-slider-menu-micro pc-menu-activity"><div class="pc-slider-menu-status-circle-all"></div></div>
+			<div id="micro" class="pc-slider-menu-micro"><div class="pc-slider-menu-status-circle-half"></div></div>`);
+			for (const mode of ['next', 'job'] as const) {
+				assert.equal(unipusNext(document, false, mode)?.id, active + 1 < count ? `tab-${active + 1}` : 'micro');
+			}
+		}
+	}
+});
+
+test('答题小结替换题目节点后仍能识别提交成功，不要求底部出现重答按钮', () => {
+	const root = page('<main id="main-content"><div class="question-abs-question"></div></main>');
+	const question = root.querySelector('.question-abs-question')!;
+	root.querySelector('#main-content')!.innerHTML =
+		'<h2>答题小结</h2><div>100 分</div><h3>答题情况</h3><div>正确（10/10）</div>';
+	assert.equal(question.isConnected, false);
+	assert.equal(unipusWorkSubmitted(document), true);
+	root.querySelector('#main-content')!.innerHTML =
+		'<div class="question-abs-question"><h2>答题小结</h2><h3>答题情况</h3></div>';
+	assert.equal(unipusWorkSubmitted(document), true);
+	root.querySelector('#main-content')!.innerHTML =
+		'<div class="question-abs-question">请翻译“答题小结”和“答题情况”</div>';
+	assert.equal(unipusWorkSubmitted(document), false);
+});
+
+test('题目被小结替换后由课件会话继续跳转，手动模式保持等待', async () => {
+	const { watchCourseware, UnipusProject } = require('../packages/scripts/src/projects/unipus');
+	const { $ } = require('../packages/core');
+	const { $message } = require('easy-us');
+	const study = UnipusProject.scripts.study;
+	const descriptor = Object.getOwnPropertyDescriptor(study, 'cfg');
+	const originalSleep = $.sleep;
+	const originalInfo = $message.info;
+	const originalWarn = $message.warn;
+	const originalHash = location.hash;
+	let cleanup: (() => void) | undefined;
+	try {
+		$.sleep = async () => {};
+		$message.info = () => undefined;
+		$message.warn = () => undefined;
+		for (const mode of ['next', 'job', 'manually']) {
+			Object.defineProperty(study, 'cfg', {
+				configurable: true,
+				value: { mode, onlyRequired: false, enableMedia: false }
+			});
+			location.hash = `#/unipus-regression-${mode}`;
+			const root = page(`<div class="pc-tab-row">
+				<div class="tab pc-header-tab-activity"><div class="pc-tab-view-container">Words in use</div></div>
+				<div class="tab"><div class="pc-tab-view-container" id="expressions">Expressions in use</div></div>
+				<div class="tab"><div class="pc-tab-view-container">Sentence structure</div></div>
+			</div><div class="pc-slider-menu-micro pc-menu-activity"><div class="pc-slider-menu-status-circle-all"></div></div>
+			<main id="main-content"><div class="question-abs-question">Exercise</div></main>`);
+			const question = root.querySelector('.question-abs-question')!;
+			let clicks = 0;
+			root.querySelector('#expressions')!.addEventListener('click', () => {
+				clicks++;
+				location.hash += '-next';
+			});
+			cleanup = watchCourseware();
+			await new Promise((resolve) => setTimeout(resolve, 650));
+			root.querySelector('#main-content')!.innerHTML = '<h2>答题小结</h2><h3>答题情况</h3><p>正确（10/10）</p>';
+			await new Promise((resolve) => setTimeout(resolve, 650));
+			assert.equal(question.isConnected, false);
+			assert.equal(clicks, mode === 'manually' ? 0 : 1);
+			// hash 已切换、旧小结仍在 DOM 中时不能再次自动跳过新页面。
+			await new Promise((resolve) => setTimeout(resolve, 650));
+			assert.equal(clicks, mode === 'manually' ? 0 : 1);
+			cleanup();
+			cleanup = undefined;
+		}
+	} finally {
+		cleanup?.();
+		if (descriptor) Object.defineProperty(study, 'cfg', descriptor);
+		else delete study.cfg;
+		$.sleep = originalSleep;
+		$message.info = originalInfo;
+		$message.warn = originalWarn;
+		location.hash = originalHash;
+	}
 });
 
 test('顺序模式遇到锁定的下一练习会暂停，不越过锁定内容', () => {
