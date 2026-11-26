@@ -93,7 +93,9 @@ export function commonWork(options: {
 	// worker 工作状态统一通过 CommonEvents.emitWorkerStateChange 广播：
 	// 结果面板按钮显隐与搜题气泡均以该事件为唯一数据源
 
-	CommonProject.scripts.settings.on('answerer-wrapper-change', async (curr, prev) => {
+	let disposed = false;
+	const onAnswererChange = async (curr: AnswererWrapper[]) => {
+		if (disposed) return;
 		$console.log('answerer-wrapper-change curr.length', curr.length);
 		if (curr.length > 0) {
 			state.checkFailed = false;
@@ -101,7 +103,8 @@ export function commonWork(options: {
 			await closeAnswerWrapperEmptyWarning();
 			start();
 		}
-	});
+	};
+	CommonProject.scripts.settings.on('answerer-wrapper-change', onAnswererChange);
 	let workOptions = CommonProject.scripts.settings.methods.getWorkOptions();
 
 	/** 本次调用的可变状态（实例隔离，不与其它 commonWork 调用共享） */
@@ -248,6 +251,7 @@ export function commonWork(options: {
 	}
 
 	const start = async () => {
+		if (disposed) return;
 		// 防重入：运行中重复触发（如连点重新开始）直接忽略
 		if (state.running) {
 			return;
@@ -258,6 +262,7 @@ export function commonWork(options: {
 		// 重新获取题库配置（防止题库变化事件触发后无法获取到最新题库配置）
 		workOptions = CommonProject.scripts.settings.methods.getWorkOptions();
 		await options.beforeRunning?.();
+		if (disposed) return;
 		state.running = true;
 		// 运行答题
 		state.worker = options.workerProvider(workOptions);
@@ -291,6 +296,20 @@ export function commonWork(options: {
 				emitState('done');
 				iframeControl?.finish();
 			});
+		}
+	};
+
+	/** SPA 切题时释放旧会话，尚未执行的倒计时回调由 disposed 拦截。 */
+	return () => {
+		if (disposed) return;
+		disposed = true;
+		CommonProject.scripts.settings.off('answerer-wrapper-change', onAnswererChange);
+		state.worker?.emit('close');
+		if (checkMessage instanceof MessageElement) checkMessage.remove();
+		iframeControl?.dispose();
+		if (options.mount_script) {
+			const binding = commonWorkRenderBindings.get(options.mount_script);
+			if (binding?.current === renderPanelBody) binding.current = () => {};
 		}
 	};
 }

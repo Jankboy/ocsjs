@@ -39,7 +39,7 @@ async function createUserJs() {
 
 	/** 先编译样式（easy-us 基础样式 + OCS 自定义样式），保证 style.css 为最新 */
 	await buildStyle();
-	const CSS_PATH = path.join(__dirname, '../packages/scripts/assets/css/style.css')
+	const CSS_PATH = path.join(__dirname, '../packages/scripts/assets/css/style.css');
 
 	// @ts-ignore
 	globalThis.unsafeWindow = {};
@@ -50,8 +50,8 @@ async function createUserJs() {
 
 	/** @return {import('../packages/utils').CreateOptions} */
 	const createOptions = () => {
-		const { CXProject, ZHSProject, ZJYProject, IcveMoocProject, ICourseProject, YKTProject } = ocs;
-		const projectList = [CXProject, ZHSProject, ZJYProject, IcveMoocProject, ICourseProject, YKTProject]
+		const { CXProject, ZHSProject, ZJYProject, IcveMoocProject, ICourseProject, YKTProject, UnipusProject } = ocs;
+		const projectList = [CXProject, ZHSProject, ZJYProject, IcveMoocProject, ICourseProject, YKTProject, UnipusProject]
 			.map((s) => `【${s.name}】`)
 			.join(' ');
 
@@ -90,9 +90,16 @@ async function createUserJs() {
 				homepage: 'https://docs.ocsjs.com',
 				source: 'https://github.com/ocsjs/ocsjs',
 				icon: 'https://cdn.ocsjs.com/logo.png',
-				connect: ['enncy.cn', 'icodef.com', 'ocsjs.com', 'zaizhexue.top', 'localhost', '127.0.0.1',
+				connect: [
+					'enncy.cn',
+					'icodef.com',
+					'ocsjs.com',
+					'zaizhexue.top',
+					'localhost',
+					'127.0.0.1',
 					// 智慧树阿里云资源，应用： 图片题资源访问
-					'aliyuncs.com'],
+					'aliyuncs.com'
+				],
 				match: matchMetadata,
 				grant: [
 					'GM_info',
@@ -135,10 +142,7 @@ async function createUserJs() {
 	devOpts.entry = path.join(__dirname, '../packages/scripts/entry.dev.js');
 	devOpts.dist = path.join(distResolvedPath, 'ocs.dev.user.js');
 	/** 导出样式文件 */
-	fs.copyFileSync(
-		CSS_PATH,
-		path.join(distResolvedPath, 'style.css')
-	);
+	fs.copyFileSync(CSS_PATH, path.join(distResolvedPath, 'style.css'));
 	console.log('createUserScript: ', devOpts.metadata.name, devOpts.dist);
 	await createUserScript(devOpts);
 

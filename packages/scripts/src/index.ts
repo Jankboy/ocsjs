@@ -7,6 +7,7 @@ import { IcveMoocProject } from './projects/icve';
 import { ZJYProject } from './projects/zjy';
 import { ICourseProject } from './projects/icourse';
 import { YKTProject } from './projects/yuketang';
+import { UnipusProject } from './projects/unipus';
 
 /** 导出所有的 OCS 核心模块 */
 export * from '@ocsjs/core';
@@ -21,6 +22,7 @@ export { ZJYProject } from './projects/zjy';
 export { IcveMoocProject } from './projects/icve';
 export { ICourseProject } from './projects/icourse';
 export { YKTProject } from './projects/yuketang';
+export { UnipusProject } from './projects/unipus';
 export { RenderScript } from './render';
 export { logoSvg } from './utils/ui';
 export {
@@ -39,6 +41,7 @@ export function definedProjects(): Project[] {
 		ZJYProject,
 		ICourseProject,
 		YKTProject,
+		UnipusProject,
 		CommonProject,
 		BackgroundProject
 	];

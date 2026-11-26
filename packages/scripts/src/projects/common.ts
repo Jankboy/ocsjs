@@ -8,7 +8,15 @@ import {
 } from '@ocsjs/core';
 import { $message, h, $gm, $store, Project, Script, $modal, $ui, MessageElement, cors } from 'easy-us';
 import type { AnswererWrapper } from '@ocsjs/core';
-import { CXProject, ICourseProject, IcveMoocProject, YKTProject, ZHSProject, ZJYProject } from '../index';
+import {
+	CXProject,
+	ICourseProject,
+	IcveMoocProject,
+	UnipusProject,
+	YKTProject,
+	ZHSProject,
+	ZJYProject
+} from '../index';
 import { BackgroundProject } from './background';
 import { enableCopy } from '../utils';
 import { SearchInfosElement } from '../elements/search.infos';
@@ -1445,7 +1453,8 @@ export const CommonProject = Project.create({
 				});
 				CommonProject.scripts.workResults.on('work-current-result-change', (cur) => {
 					if (cur.searching) {
-						if (working_msg) working_msg.innerHTML = loadingSpinSvg + ` 正在搜题 ${formatQuestionForMessage(cur.question)}`;
+						if (working_msg)
+							working_msg.innerHTML = loadingSpinSvg + ` 正在搜题 ${formatQuestionForMessage(cur.question)}`;
 					}
 				});
 			}
@@ -1716,13 +1725,15 @@ const createGuide = () => {
 			h(
 				'div',
 				{ style: { display: 'flex', flexWrap: 'wrap', gap: '4px', maxWidth: '400px' } },
-				[CXProject, ZHSProject, ZJYProject, IcveMoocProject, ICourseProject, YKTProject].map((project) => {
-					const btn = h('button', { className: 'base-style-button-secondary' }, [project.name]);
-					btn.onclick = () => {
-						showProjectDetails(project);
-					};
-					return h('span', [btn]);
-				})
+				[CXProject, ZHSProject, ZJYProject, IcveMoocProject, ICourseProject, YKTProject, UnipusProject].map(
+					(project) => {
+						const btn = h('button', { className: 'base-style-button-secondary' }, [project.name]);
+						btn.onclick = () => {
+							showProjectDetails(project);
+						};
+						return h('span', [btn]);
+					}
+				)
 			)
 		]),
 		h('div', { style: { margin: '12px 0px' } }, [
