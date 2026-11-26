@@ -4,11 +4,13 @@ import {
 	fillUnipusInput,
 	normalizeUnipusCompletionAnswer,
 	unipusMedia,
+	unipusMicroFinished,
 	unipusNext,
 	unipusOptions,
 	unipusQuestionType,
 	unipusQuestions,
-	unipusRequired
+	unipusRequired,
+	unipusWorkSubmitted
 } from '../packages/scripts/src/utils/unipus';
 
 require('browser-env')();
@@ -253,6 +255,66 @@ test('没有当前任务或下一项锁定时停止', () => {
 		'<div class="pc-slider-menu-micro pc-menu-activity"></div><div class="pc-slider-menu-micro"><span aria-label="lock"></span></div>'
 	);
 	assert.equal(unipusNext(document), undefined);
+});
+
+test('手动跳转模式不会选择下一练习、页签或任务', () => {
+	page(`<div class="pc-header-tasks-row"><div class="pc-task pc-header-task-activity"></div><div class="pc-task"></div></div>
+		<div class="pc-slider-menu-micro pc-menu-activity"></div><div class="pc-slider-menu-micro"></div>`);
+	assert.equal(unipusNext(document, false, 'manually'), undefined);
+	assert.equal(unipusNext(document, true, 'manually'), undefined);
+});
+
+test('任务完成标记区分全部完成、部分完成和未知状态', () => {
+	for (const [className, expected] of [
+		['pc-slider-menu-status-circle-all', true],
+		['pc-slider-menu-status-circle-half', false],
+		['unknown', undefined]
+	] as const) {
+		assert.equal(unipusMicroFinished(page(`<div class="${className}"></div>`)), expected);
+	}
+});
+
+test('未完成模式跳过已完成、锁定、未知及非必修任务，并可回到前面的未完成任务', () => {
+	page(`<div id="earlier" class="pc-slider-menu-micro"><div class="pc-slider-menu-status-circle-half"></div></div>
+		<div class="pc-slider-menu-micro pc-menu-activity"><div class="pc-slider-menu-status-circle-all"></div></div>
+		<div class="pc-slider-menu-micro"><div class="pc-slider-menu-status-circle-all"></div></div>
+		<div class="pc-slider-menu-micro" aria-disabled="true"><div class="pc-slider-menu-status-circle-half"></div></div>
+		<div class="pc-slider-menu-micro"></div>
+		<div id="optional" class="pc-slider-menu-micro"><div class="pc-slider-menu-status-circle-half"></div></div>
+		<div id="later" class="pc-slider-menu-micro"><div class="pc-slider-menu-status-circle-half"></div></div>`);
+	const excluded = new Set([document.querySelector<HTMLElement>('#optional')!]);
+	assert.equal(unipusNext(document, false, 'job', excluded)?.id, 'later');
+	document.querySelector('#later')!.remove();
+	assert.equal(unipusNext(document, false, 'job', excluded)?.id, 'earlier');
+	document.querySelector('#earlier')!.remove();
+	assert.equal(unipusNext(document, false, 'job', excluded), undefined);
+});
+
+test('未完成模式先处理当前任务的后续练习，全部完成的任务直接离开', () => {
+	page(`<div class="pc-header-tasks-row"><div class="pc-task pc-header-task-activity"></div><div id="exercise" class="pc-task"></div></div>
+		<div class="pc-slider-menu-micro pc-menu-activity"><div id="progress" class="pc-slider-menu-status-circle-half"></div></div>
+		<div id="nextMicro" class="pc-slider-menu-micro"><div class="pc-slider-menu-status-circle-half"></div></div>`);
+	assert.equal(unipusNext(document, false, 'job')?.id, 'exercise');
+	document.querySelector('#progress')!.className = 'pc-slider-menu-status-circle-all';
+	assert.equal(unipusNext(document, false, 'job')?.id, 'nextMicro');
+});
+
+test('顺序模式遇到锁定的下一练习会暂停，不越过锁定内容', () => {
+	page(`<div class="pc-header-tasks-row"><div class="pc-task pc-header-task-activity"></div>
+		<div class="pc-task" aria-disabled="true"></div></div>
+		<div class="pc-slider-menu-micro pc-menu-activity"></div><div class="pc-slider-menu-micro"></div>`);
+	assert.equal(unipusNext(document), undefined);
+});
+
+test('提交确认弹窗、仍可提交和空页面不视为提交成功', () => {
+	page('<footer id="pc-foot"><div class="question-common-course-page"><a class="btn">提 交</a></div></footer>');
+	assert.equal(unipusWorkSubmitted(document), false);
+	document.querySelector('.btn')!.textContent = '重新答题';
+	assert.equal(unipusWorkSubmitted(document), true);
+	document.body.insertAdjacentHTML('beforeend', '<div class="ant-modal-content">请确认</div>');
+	assert.equal(unipusWorkSubmitted(document), false);
+	page('');
+	assert.equal(unipusWorkSubmitted(document), false);
 });
 
 test('切题释放 commonWork 后，旧倒计时和配置事件都不能再启动 worker', async () => {

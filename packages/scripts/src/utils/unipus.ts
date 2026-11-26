@@ -104,8 +104,30 @@ export function unipusRequired(text: string): boolean | undefined {
 	return undefined;
 }
 
-export function unipusNext(doc: Document, nextMicro = false): HTMLElement | undefined {
-	for (const [selector, activeClass] of nextMicro
+export type UnipusJumpMode = 'next' | 'job' | 'manually';
+
+function navigationLocked(element: HTMLElement) {
+	return element.getAttribute('aria-disabled') === 'true' || !!element.querySelector('[aria-label="lock"]');
+}
+
+/** 全圆表示已完成，半圆表示尚未完成；没有进度标记时保留未知状态。 */
+export function unipusMicroFinished(micro: HTMLElement): boolean | undefined {
+	if (micro.querySelector('.pc-slider-menu-status-circle-all')) return true;
+	if (micro.querySelector('.pc-slider-menu-status-circle-half')) return false;
+	return undefined;
+}
+
+export function unipusNext(
+	doc: Document,
+	nextMicro = false,
+	mode: UnipusJumpMode = 'next',
+	excluded: ReadonlySet<HTMLElement> = new Set()
+): HTMLElement | undefined {
+	if (mode === 'manually') return undefined;
+	const micros = Array.from(doc.querySelectorAll<HTMLElement>('.pc-slider-menu-micro'));
+	const index = micros.findIndex((micro) => micro.classList.contains('pc-menu-activity'));
+	const currentFinished = index >= 0 && unipusMicroFinished(micros[index]) === true;
+	for (const [selector, activeClass] of nextMicro || (mode === 'job' && currentFinished)
 		? []
 		: [
 				['.pc-header-tasks-row .pc-task', 'pc-header-task-activity'],
@@ -113,11 +135,24 @@ export function unipusNext(doc: Document, nextMicro = false): HTMLElement | unde
 		  ]) {
 		const tabs = Array.from(doc.querySelectorAll<HTMLElement>(selector));
 		const index = tabs.findIndex((tab) => tab.classList.contains(activeClass));
-		if (index >= 0 && index + 1 < tabs.length) return tabs[index + 1];
+		if (index >= 0 && index + 1 < tabs.length) {
+			return navigationLocked(tabs[index + 1]) ? undefined : tabs[index + 1];
+		}
 	}
-	const micros = Array.from(doc.querySelectorAll<HTMLElement>('.pc-slider-menu-micro'));
-	const index = micros.findIndex((micro) => micro.classList.contains('pc-menu-activity'));
-	const next = index >= 0 ? micros[index + 1] : undefined;
-	if (next?.getAttribute('aria-disabled') === 'true' || next?.querySelector('[aria-label="lock"]')) return undefined;
+	if (index < 0) return undefined;
+	if (mode === 'job') {
+		return [...micros.slice(index + 1), ...micros.slice(0, index)].find(
+			(micro) => !excluded.has(micro) && !navigationLocked(micro) && unipusMicroFinished(micro) === false
+		);
+	}
+	const next = micros[index + 1];
+	if (next && navigationLocked(next)) return undefined;
 	return next;
+}
+
+/** 提交后的操作按钮出现时才允许离开，确认弹窗和仍可提交的页面继续等待。 */
+export function unipusWorkSubmitted(doc: Document) {
+	if (doc.querySelector('.ant-modal-content')) return false;
+	const text = doc.querySelector('#pc-foot .question-common-course-page .btn')?.textContent?.replace(/\s/g, '');
+	return /^(重新答题|重新作答|重做|再做一次|查看答案|查看解析|已提交)$/.test(text || '');
 }

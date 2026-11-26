@@ -14,7 +14,9 @@ import {
 	unipusOptions,
 	unipusQuestionType,
 	unipusQuestions,
-	unipusRequired
+	unipusRequired,
+	unipusWorkSubmitted,
+	UnipusJumpMode
 } from '../utils/unipus';
 
 const courseware = /^https:\/\/ucontent\.unipus\.cn\/_explorationpc_default\/pc\.html/;
@@ -49,7 +51,16 @@ export const UnipusProject = Project.create({
 				},
 				enableMedia: { label: '自动播放音视频', attrs: { type: 'checkbox' }, defaultValue: true },
 				onlyRequired: { label: '只做必修', attrs: { type: 'checkbox' }, defaultValue: false },
-				autoNext: { label: '媒体结束后自动切换', attrs: { type: 'checkbox' }, defaultValue: false },
+				mode: {
+					label: '跳转模式',
+					tag: 'select',
+					options: [
+						['next', '完成后跳转下一节', '按练习、页签和目录任务的顺序继续学习'],
+						['job', '完成后跳转未完成任务点', '跳过目录中已完成或锁定的任务，找不到可用任务时暂停'],
+						['manually', '完成后暂停，等待手动跳转', '完成当前页面后等待手动切换']
+					],
+					defaultValue: 'manually' as UnipusJumpMode
+				},
 				playbackRate,
 				volume
 			},
@@ -101,6 +112,8 @@ function watchCourseware() {
 	let timer: ReturnType<typeof setTimeout>;
 	let required: boolean | undefined;
 	let mountedRequired: boolean | undefined;
+	const excludedMicros = new Set<HTMLElement>();
+	const jumpedPages = new Set<string>();
 
 	const refresh = () => {
 		const root = document.querySelector<HTMLElement>('#main-content .question-abs-question');
@@ -116,10 +129,47 @@ function watchCourseware() {
 		const hash = location.hash;
 		let active = true;
 		const current = () => active && location.hash === hash && root.isConnected;
+		let jumping = false;
+		const navigate = async (nextMicro = false, allowed = () => true) => {
+			if (!current() || jumping) return;
+			if (study.cfg.mode === 'manually') {
+				$message.info('当前内容已结束，自动跳转已关闭，请手动切换。');
+				return;
+			}
+			if (jumpedPages.has(hash)) {
+				$message.warn('重复到达同一课件，请检查未完成内容后手动切换。');
+				return;
+			}
+			jumping = true;
+			$message.info('当前内容已结束，5秒后按跳转模式继续学习。');
+			await $.sleep(5000);
+			if (!current() || (study.cfg.mode as UnipusJumpMode) === 'manually' || !allowed()) return;
+			const target = unipusNext(document, nextMicro, study.cfg.mode, excludedMicros);
+			if (!target) {
+				$message.info(
+					study.cfg.mode === 'job'
+						? '未找到可跳转的未完成任务，请手动检查课程目录。'
+						: '没有可跳转的下一节，请手动检查课程目录。'
+				);
+				return;
+			}
+			jumpedPages.add(hash);
+			const button = target.querySelector<HTMLElement>('.pc-tab-view-container, .pc-menu-node-name') || target;
+			button.click();
+			await $.sleep(2000);
+			if (current()) $message.warn('页面未发生切换，请手动点击下一任务。');
+		};
+		dispose = () => {
+			active = false;
+		};
 		tip?.closest('.ant-modal-content')?.querySelector<HTMLElement>('.system-info-cloud-ok-button')?.click();
 		if (study.cfg.onlyRequired && required !== true) {
 			$message.info(required === false ? '当前内容为非必修，已跳过。' : '尚未确认必修状态，请查看平台的学习要求提示。');
-			if (required === false && study.cfg.autoNext) unipusNext(document, true)?.click();
+			if (required === false) {
+				const micro = document.querySelector<HTMLElement>('.pc-slider-menu-micro.pc-menu-activity');
+				if (micro) excludedMicros.add(micro);
+				navigate(true).catch((error) => $console.error('U校园跳转失败：' + String(error)));
+			}
 			return;
 		}
 
@@ -133,18 +183,20 @@ function watchCourseware() {
 		};
 		const ended = () => {
 			const hasExercise = root.querySelector('.layout-reply-container, .question-common-abs-reply');
-			if (current() && study.cfg.autoNext && !hasExercise) unipusNext(document)?.click();
+			if (current() && !hasExercise) navigate().catch((error) => $console.error('U校园跳转失败：' + String(error)));
 		};
 		if (media && managedMedia) {
 			updateMedia();
 			media.addEventListener('loadedmetadata', updateMedia);
 			media.addEventListener('ended', ended);
-			playMedia(() => (current() && study.cfg.enableMedia ? media.play() : undefined));
+			if (media.ended) ended();
+			else playMedia(() => (current() && study.cfg.enableMedia ? media.play() : undefined));
 		}
 		const disposeWork = unipusQuestionType(root)
 			? commonWork({
 					mount_script: UnipusProject.scripts.work,
-					workerProvider: (opts) => (current() ? createWorker(root, opts, current) : undefined)
+					workerProvider: (opts) =>
+						current() ? createWorker(root, opts, current, (allowed) => navigate(false, allowed)) : undefined
 			  })
 			: undefined;
 		if (!media && !disposeWork) $message.info('当前课件需要手动完成。');
@@ -179,6 +231,10 @@ function watchCourseware() {
 			schedule();
 		});
 	}
+	study.onConfigChange('mode', () => {
+		jumpedPages.clear();
+	});
+	study.onConfigChange('onlyRequired', () => excludedMicros.clear());
 	for (const key of ['volume', 'playbackRate'] as const) {
 		study.onConfigChange(key, () => {
 			if (study.cfg.onlyRequired && required !== true) return;
@@ -203,7 +259,12 @@ function watchCourseware() {
 	schedule();
 }
 
-function createWorker(root: HTMLElement, opts: CommonWorkOptions, current: () => boolean) {
+function createWorker(
+	root: HTMLElement,
+	opts: CommonWorkOptions,
+	current: () => boolean,
+	onSubmitted: (allowed: () => boolean) => Promise<void>
+) {
 	const type = unipusQuestionType(root);
 	if (!type) return undefined;
 	// 听力题的正文常只有通用指令，带上教材及当前任务名称，避免不同单元命中同一缓存。
@@ -336,10 +397,20 @@ function createWorker(root: HTMLElement, opts: CommonWorkOptions, current: () =>
 					while (worker.isStop && current() && !worker.isClose) await $.sleep(200);
 					if (!current() || worker.isClose) return;
 					const submit = document.querySelector<HTMLElement>('#pc-foot .question-common-course-page .btn');
-					if (submit?.textContent?.replace(/\s/g, '') === '提交') submit.click();
+					if (submit?.textContent?.replace(/\s/g, '') !== '提交') return;
+					submit.click();
+					if (!results.length || results.some((result) => !result.result?.finish)) return;
+					for (let attempt = 0; attempt < 50 && current() && !worker.isClose; attempt++) {
+						await $.sleep(200);
+						if (unipusWorkSubmitted(document)) {
+							await onSubmitted(() => !worker.isStop && !worker.isClose);
+							return;
+						}
+					}
+					if (current() && !worker.isClose) $message.info('尚未确认提交成功，请检查页面后手动继续。');
 				}
 			});
-			$message.info('本页答题完成，请检查页面结果后继续。');
+			if (current()) $message.info('本页答题完成，请检查页面结果后继续。');
 		} catch (error) {
 			if (current() && !worker.isClose) $console.error('U校园答题失败：' + String(error));
 		} finally {
