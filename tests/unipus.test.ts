@@ -436,6 +436,73 @@ test('题目被小结替换后由课件会话继续跳转，手动模式保持�
 	}
 });
 
+test('只做必修仅跳过明确非必修，未知状态仍初始化答题和媒体', async () => {
+	const { watchCourseware, UnipusProject } = require('../packages/scripts/src/projects/unipus');
+	const { CommonProject } = require('../packages/scripts/src/projects/common');
+	const { BackgroundProject } = require('../packages/scripts/src/projects/background');
+	const { $ui, $message } = require('easy-us');
+	const study = UnipusProject.scripts.study;
+	const settings = CommonProject.scripts.settings;
+	const render = BackgroundProject.scripts.render;
+	const descriptor = Object.getOwnPropertyDescriptor(study, 'cfg');
+	const originalOptions = settings.methods.getWorkOptions;
+	const originalPin = render.methods.pin;
+	const originalPrevent = $ui.preventText;
+	const originalInfo = $message.info;
+	const originalHash = location.hash;
+	let cleanup: (() => void) | undefined;
+	try {
+		render.methods.pin = () => undefined;
+		$ui.preventText = () => document.createElement('span');
+		$message.info = () => undefined;
+		for (const [onlyRequired, tip, expected] of [
+			[true, '', 1],
+			[true, '是否必修：必修', 1],
+			[true, '是否必修：非必修', 0],
+			[false, '是否必修：非必修', 1]
+		] as const) {
+			let workStarted = 0;
+			let mediaStarted = 0;
+			settings.methods.getWorkOptions = () => {
+				workStarted++;
+				return { answererWrappers: [{}] };
+			};
+			Object.defineProperty(study, 'cfg', {
+				configurable: true,
+				value: { onlyRequired, mode: 'manually', enableMedia: true, volume: 0.3, playbackRate: 1.25 }
+			});
+			location.hash = `#/unipus-required-${onlyRequired}-${expected}-${tip}`;
+			page(`<div class="task_tip">${tip}</div><main id="main-content"><div class="question-abs-question">
+				<div class="fill-blank-reply"><input></div><div class="question-video-player"><video></video></div>
+			</div></main>`);
+			const media = document.querySelector('video')!;
+			media.play = async () => {
+				mediaStarted++;
+			};
+			media.pause = () => {};
+			cleanup = watchCourseware();
+			await new Promise((resolve) => setTimeout(resolve, 650));
+			assert.equal(workStarted, expected, `答题初始化：${tip || '状态未知'}`);
+			assert.equal(mediaStarted, expected, `媒体播放：${tip || '状态未知'}`);
+			if (expected) {
+				assert.equal(media.volume, 0.3);
+				assert.equal(media.playbackRate, 1.25);
+			}
+			cleanup();
+			cleanup = undefined;
+		}
+	} finally {
+		cleanup?.();
+		if (descriptor) Object.defineProperty(study, 'cfg', descriptor);
+		else delete study.cfg;
+		settings.methods.getWorkOptions = originalOptions;
+		render.methods.pin = originalPin;
+		$ui.preventText = originalPrevent;
+		$message.info = originalInfo;
+		location.hash = originalHash;
+	}
+});
+
 test('顺序模式遇到锁定的下一练习会暂停，不越过锁定内容', () => {
 	page(`<div class="pc-header-tasks-row"><div class="pc-task pc-header-task-activity"></div>
 		<div class="pc-task" aria-disabled="true"></div></div>

@@ -46,7 +46,7 @@ export const UnipusProject = Project.create({
 						'支持课件中的主音视频，以及单选、多选、填空和可输入的选词填空练习。',
 						'支持普通文本框简答的答案回填，主观内容请自行检查。',
 						'口语、讨论、个人经历填写及未识别的题型需要手动完成。',
-						'只做必修开启后，必修状态不明确时会暂停，请查看平台的学习要求提示。'
+						'只做必修开启后，仅跳过已确认的非必修内容；状态不明时照常学习和答题。'
 					]).outerHTML
 				},
 				enableMedia: { label: '自动播放音视频', attrs: { type: 'checkbox' }, defaultValue: true },
@@ -191,13 +191,11 @@ export function watchCourseware() {
 			active = false;
 		};
 		tip?.closest('.ant-modal-content')?.querySelector<HTMLElement>('.system-info-cloud-ok-button')?.click();
-		if (study.cfg.onlyRequired && required !== true) {
-			$message.info(required === false ? '当前内容为非必修，已跳过。' : '尚未确认必修状态，请查看平台的学习要求提示。');
-			if (required === false) {
-				const micro = document.querySelector<HTMLElement>('.pc-slider-menu-micro.pc-menu-activity');
-				if (micro) excludedMicros.add(micro);
-				navigate(hash, true, current).catch((error) => $console.error('U校园跳转失败：' + String(error)));
-			}
+		if (study.cfg.onlyRequired && required === false) {
+			$message.info('当前内容为非必修，已跳过。');
+			const micro = document.querySelector<HTMLElement>('.pc-slider-menu-micro.pc-menu-activity');
+			if (micro) excludedMicros.add(micro);
+			navigate(hash, true, current).catch((error) => $console.error('U校园跳转失败：' + String(error)));
 			return;
 		}
 
@@ -269,7 +267,7 @@ export function watchCourseware() {
 	study.onConfigChange('onlyRequired', () => excludedMicros.clear());
 	for (const key of ['volume', 'playbackRate'] as const) {
 		study.onConfigChange(key, () => {
-			if (study.cfg.onlyRequired && required !== true) return;
+			if (study.cfg.onlyRequired && required === false) return;
 			const media = unipusMedia(document);
 			if (!media) return;
 			media.volume = Number(study.cfg.volume);
