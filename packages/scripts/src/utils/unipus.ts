@@ -107,7 +107,12 @@ export function unipusRequired(text: string): boolean | undefined {
 export type UnipusJumpMode = 'next' | 'job' | 'manually';
 
 function navigationLocked(element: HTMLElement) {
-	return element.getAttribute('aria-disabled') === 'true' || !!element.querySelector('[aria-label="lock"]');
+	return (
+		element.matches(':disabled') ||
+		element.hasAttribute('disabled') ||
+		element.getAttribute('aria-disabled') === 'true' ||
+		!!element.querySelector('[aria-label="lock"]')
+	);
 }
 
 /** 全圆表示已完成，半圆表示尚未完成；没有进度标记时保留未知状态。 */
@@ -138,6 +143,14 @@ export function unipusNext(
 		if (index >= 0 && index + 1 < tabs.length) {
 			return navigationLocked(tabs[index + 1]) ? undefined : tabs[index + 1];
 		}
+	}
+	// 板块内的练习和页签结束后，让平台的“继续学习”处理下一节及解锁条件。
+	if (mode === 'next' && !nextMicro && unipusWorkSubmitted(doc)) {
+		const button = Array.from(doc.querySelectorAll<HTMLElement>('#pc-foot button, #pc-foot a')).find(
+			(element) =>
+				element.textContent?.replace(/\s/g, '') === '继续学习' && !element.closest('[hidden], [aria-hidden="true"]')
+		);
+		if (button) return navigationLocked(button) ? undefined : button;
 	}
 	if (index < 0) return undefined;
 	if (mode === 'job') {

@@ -316,6 +316,37 @@ test('顶部页签数量动态变化，逐一选择下一页签，最后才离�
 	}
 });
 
+test('顺序模式在最后一个练习和页签结束后点击继续学习，不直接点击目录', () => {
+	page(`<div class="pc-tab-row"><div class="tab pc-header-tab-activity"></div></div>
+		<div class="pc-header-tasks-row"><div class="pc-task pc-header-task-activity"></div></div>
+		<div class="pc-slider-menu-micro pc-menu-activity"></div>
+		<div id="micro" class="pc-slider-menu-micro"><div class="pc-slider-menu-status-circle-half"></div></div>
+		<main id="main-content"><h2>答题小结</h2><h3>答题情况</h3></main>
+		<footer id="pc-foot"><button id="continue">继 续 学 习</button></footer>`);
+	const button = document.querySelector<HTMLElement>('#continue')!;
+	assert.equal(unipusNext(document), button);
+	assert.equal(unipusNext(document, false, 'job')?.id, 'micro');
+	assert.equal(unipusNext(document, false, 'manually'), undefined);
+	assert.equal(unipusNext(document, true)?.id, 'micro');
+	button.setAttribute('disabled', '');
+	assert.equal(unipusNext(document), undefined);
+	button.removeAttribute('disabled');
+	button.setAttribute('aria-disabled', 'true');
+	assert.equal(unipusNext(document), undefined);
+});
+
+test('存在继续学习按钮时仍优先完成同板块的剩余练习和页签', () => {
+	page(`<div class="pc-header-tasks-row"><div class="pc-task pc-header-task-activity"></div><div id="task" class="pc-task"></div></div>
+		<div class="pc-tab-row"><div class="tab pc-header-tab-activity"></div><div id="tab" class="tab"></div></div>
+		<main id="main-content"><h2>答题小结</h2><h3>答题情况</h3></main>
+		<footer id="pc-foot"><a id="continue">继续学习</a></footer>`);
+	assert.equal(unipusNext(document)?.id, 'task');
+	document.querySelector('#task')!.remove();
+	assert.equal(unipusNext(document)?.id, 'tab');
+	document.querySelector('#tab')!.remove();
+	assert.equal(unipusNext(document)?.id, 'continue');
+});
+
 test('答题小结替换题目节点后仍能识别提交成功，不要求底部出现重答按钮', () => {
 	const root = page('<main id="main-content"><div class="question-abs-question"></div></main>');
 	const question = root.querySelector('.question-abs-question')!;
@@ -376,6 +407,24 @@ test('题目被小结替换后由课件会话继续跳转，手动模式保持�
 			cleanup();
 			cleanup = undefined;
 		}
+		Object.defineProperty(study, 'cfg', {
+			configurable: true,
+			value: { mode: 'next', onlyRequired: false, enableMedia: false }
+		});
+		location.hash = '#/unipus-continue-regression';
+		page(`<div class="pc-tab-row"><div class="tab pc-header-tab-activity">Sentence structure</div></div>
+			<div class="pc-header-tasks-row"><div class="pc-task pc-header-task-activity">Task 2</div></div>
+			<main id="main-content"><h2>答题小结</h2><h3>答题情况</h3></main>
+			<footer id="pc-foot"><button id="continue">继续学习</button></footer>`);
+		let continued = 0;
+		document.querySelector('#continue')!.addEventListener('click', () => {
+			continued++;
+			location.hash = '#/unipus-next-section';
+		});
+		cleanup = watchCourseware();
+		await new Promise((resolve) => setTimeout(resolve, 650));
+		assert.equal(continued, 1);
+		assert.equal(location.hash, '#/unipus-next-section');
 	} finally {
 		cleanup?.();
 		if (descriptor) Object.defineProperty(study, 'cfg', descriptor);
