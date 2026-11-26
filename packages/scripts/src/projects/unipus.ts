@@ -41,7 +41,8 @@ export const UnipusProject = Project.create({
 			configs: {
 				notes: {
 					defaultValue: $ui.notes([
-						'支持课件中的主音视频，以及单选、多选、填空练习。',
+						'支持课件中的主音视频，以及单选、多选、填空和可输入的选词填空练习。',
+						'支持普通文本框简答的答案回填，主观内容请自行检查。',
 						'口语、讨论、个人经历填写及未识别的题型需要手动完成。',
 						'只做必修开启后，必修状态不明确时会暂停，请查看平台的学习要求提示。'
 					]).outerHTML
@@ -67,7 +68,8 @@ export const UnipusProject = Project.create({
 
 function questionText(root: HTMLElement): { text: string; images: string[] } {
 	const clone = root.cloneNode(true) as HTMLElement;
-	clone.querySelectorAll('.scoop-input-wrapper').forEach((input) => input.replaceWith(' ____ '));
+	clone.querySelectorAll('.scoop-input-wrapper, .scoop-wrapper').forEach((input) => input.replaceWith(' ____ '));
+	clone.querySelectorAll('.question-material-banked-cloze-reply .option').forEach((option) => option.remove());
 	clone
 		.querySelectorAll('.question-common-abs-choice .option, .question-audio, .question-video-player, .qc-abs-word-tips')
 		.forEach((el) => el.remove());
@@ -215,9 +217,18 @@ function createWorker(root: HTMLElement, opts: CommonWorkOptions, current: () =>
 		const question = questionText(questionRoot);
 		const directions = root.querySelector<HTMLElement>('.layout-direction-container');
 		const instruction = questionRoot !== root && directions ? extractTextWithImages(directions) : undefined;
+		const materialRoot = root.querySelector<HTMLElement>('.layout-material-container');
+		const material = questionRoot !== root && materialRoot ? questionText(materialRoot) : undefined;
+		const words =
+			questionRoot !== root
+				? Array.from(root.querySelectorAll('.question-material-banked-cloze-reply .option-placeholder'))
+						.map((word) => word.textContent?.trim())
+						.filter(Boolean)
+						.join(' / ')
+				: undefined;
 		return {
-			text: [context, instruction?.text, question.text].filter(Boolean).join('\n'),
-			images: [...(instruction?.images || []), ...question.images]
+			text: [context, instruction?.text, material?.text, words, question.text].filter(Boolean).join('\n'),
+			images: [...(instruction?.images || []), ...(material?.images || []), ...question.images]
 		};
 	};
 	CommonProject.scripts.workResults.methods.init();
@@ -230,16 +241,27 @@ function createWorker(root: HTMLElement, opts: CommonWorkOptions, current: () =>
 		answerer: createCommonAnswerer({
 			titleTransform: (_, ctx) => title(ctx.root),
 			optionsTransform: (elements, ctx) => {
-				ctx.type = type;
-				return type === 'completion' ? '' : elements.options.map(optionText).join('\n');
+				ctx.type = unipusQuestionType(ctx.root);
+				return ctx.type === 'completion' ? '' : elements.options.map(optionText).join('\n');
 			},
 			answererWrappers: opts.answererWrappers,
 			period: opts.period
 		}),
 		work: async (ctx) => {
+			const type = unipusQuestionType(ctx.root);
+			if (!type) throw new Error('当前题型尚未适配。');
 			ctx.type = type;
 			let infos = ctx.searchInfos;
-			if (type === 'completion') {
+			if (type === 'completion' && ctx.elements.options[0]?.tagName === 'TEXTAREA') {
+				// 简答中的分号、编号和换行属于正文，不能被公共填空分隔符拆开。
+				infos = infos.map((info) => ({
+					...info,
+					results: info.results.length
+						? [{ ...info.results[0], answer: JSON.stringify([info.results.map((result) => result.answer).join('\n')]) }]
+						: []
+				}));
+			}
+			if (type === 'completion' && ctx.elements.options[0]?.tagName !== 'TEXTAREA') {
 				const number = ctx.root.textContent?.match(/^\s*(\d+)[.)、]/)?.[1];
 				infos = infos.map((info) => ({
 					...info,
@@ -260,13 +282,15 @@ function createWorker(root: HTMLElement, opts: CommonWorkOptions, current: () =>
 				async (_, answer, option) => {
 					while (worker.isStop && current() && !worker.isClose) await $.sleep(200);
 					if (!current() || worker.isClose) throw new Error('课件已切换，本次答题已结束。');
-					if (type === 'completion') fillUnipusInput(option as HTMLInputElement, answer);
+					if (type === 'completion') fillUnipusInput(option as HTMLInputElement | HTMLTextAreaElement, answer);
 					else selected.add(option);
 				}
 			);
 			// 先解析完整答案，再一次性同步选项，避免取消重答时留下旧的多选项。
 			if (result.finish && type !== 'completion') {
 				for (const option of ctx.elements.options) {
+					// 单选只能选择目标项，点击旧选项不能取消它。
+					if (type === 'single' && !selected.has(option)) continue;
 					while (worker.isStop && current() && !worker.isClose) await $.sleep(200);
 					if (!current() || worker.isClose) throw new Error('课件已切换，本次答题已结束。');
 					if (option.classList.contains('selected') !== selected.has(option)) {

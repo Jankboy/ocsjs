@@ -58,6 +58,39 @@ test('个人经历、讨论、拖拽等未适配题型交给用户', () => {
 	assert.equal(unipusQuestionType(page('<div class="discussion"><textarea></textarea></div>')), undefined);
 });
 
+test('词汇测验没有 singleChoice 标记，同页十题分别提取选项', () => {
+	const root = page(
+		`<div class="question-abs-question"><div class="reply-wrap">${Array.from(
+			{ length: 10 },
+			(_, index) => `<div class="question-common-abs-reply"><div class="question-common-abs-choice">
+		<div class="ques-title">${index + 1}. word ${index}</div><div class="option-wrap">
+		<div class="option isNotReview"><div class="caption">A</div><div class="content">meaning ${index}</div></div>
+		<div class="option isNotReview"><div class="caption">B</div><div class="content">other ${index}</div></div>
+		</div></div></div>`
+		).join('')}</div></div>`
+	);
+	assert.equal(unipusQuestionType(root), 'single');
+	const questions = unipusQuestions(root);
+	assert.equal(questions.length, 10);
+	questions.forEach((question, index) => {
+		assert.equal(unipusQuestionType(question), 'single');
+		const options = unipusOptions(question);
+		assert.equal(options.length, 2);
+		assert.equal(options[0].querySelector('.content')?.textContent, `meaning ${index}`);
+	});
+});
+
+test('同页选择题按各自题型解析，个人经历题不能被拆题绕过', () => {
+	const root = page(`<div class="question-abs-question"><div class="reply-wrap">
+		<div class="question-common-abs-reply"><div class="question-common-abs-choice"><div class="option isNotReview">A</div></div></div>
+		<div class="question-common-abs-reply"><div class="question-common-abs-choice multipleChoice"><div class="option isNotReview">B</div></div></div>
+	</div></div>`);
+	assert.deepEqual(unipusQuestions(root).map(unipusQuestionType), ['single', 'multiple']);
+	root.querySelector('.question-abs-question')!.prepend(document.createTextNode('Choose statements true for you.'));
+	assert.equal(unipusQuestionType(root), undefined);
+	assert.deepEqual(unipusQuestions(root), [root]);
+});
+
 test('四道填空小题拆为四个根节点，同一道题保留两个空', () => {
 	const root =
 		page(`<div class="question-abs-question"><div class="fill-blank-reply"><div class="item"><div class="component-htmlview">
@@ -101,6 +134,64 @@ test('独立查询的小题可使用编号答案或原有分隔符，歧义时�
 
 test('未编号的连续段落不擅自拆题', () => {
 	const root = page('<div class="fill-blank-reply"><p>First <input></p><p>Then <input></p></div>');
+	assert.deepEqual(unipusQuestions(root), [root]);
+});
+
+test('可输入选词题拆分编号句子，过滤不可编辑空位', () => {
+	const root = page(`<div class="question-abs-question"><div class="question-material-banked-cloze-reply">
+		<div class="option-placeholder">available</div></div><div class="question-material-banked-cloze-scoop">
+		<p>1. Space <span class="scoop-wrapper"><input></span>.</p>
+		<p>2. Resources <span class="scoop-wrapper"><input></span>.</p>
+		<p>Review <input readonly><input disabled></p></div><input id="unrelated"></div>`);
+	assert.equal(unipusQuestionType(root), 'completion');
+	assert.equal(unipusOptions(root).length, 2);
+	assert.deepEqual(
+		unipusQuestions(root).map((question) => unipusOptions(question).length),
+		[1, 1]
+	);
+});
+
+test('篇章选词保留上下文，完整逐空编号答案按空位顺序解析', () => {
+	const root = page(`<div class="question-material-banked-cloze-scoop">
+		<p>People <span class="scoop-wrapper"><input></span> learning <span class="scoop-wrapper"><input></span>.</p>
+		<p>Then <span class="scoop-wrapper"><input></span>.</p></div>`);
+	assert.deepEqual(unipusQuestions(root), [root]);
+	assert.equal(unipusOptions(root).length, 3);
+	assert.equal(
+		normalizeUnipusCompletionAnswer('1. classify 2. passion 3. two words', 3),
+		'["classify","passion","two words"]'
+	);
+	assert.equal(normalizeUnipusCompletionAnswer('1. classify 3. passion', 3), undefined);
+	assert.equal(normalizeUnipusCompletionAnswer('1. classify 2. ', 2), undefined);
+});
+
+test('阅读简答框分别回填多行答案，保留正文中的编号', () => {
+	const root = page(`<div class="question-abs-question"><div class="reply-wrap">
+		<div class="question-common-abs-reply"><div class="question-inputbox"><div class="question-inputbox-header">1. Why?</div><textarea></textarea></div></div>
+		<div class="question-common-abs-reply"><div class="question-inputbox"><div class="question-inputbox-header">2. How?</div><textarea></textarea></div></div>
+	</div></div>`);
+	assert.equal(unipusQuestionType(root), 'completion');
+	const questions = unipusQuestions(root);
+	assert.equal(questions.length, 2);
+	const textarea = unipusOptions(questions[0])[0] as HTMLTextAreaElement;
+	let updated = '';
+	textarea.addEventListener('input', () => (updated = textarea.value));
+	fillUnipusInput(textarea, '1. First reason.\n2. Second reason.');
+	assert.equal(updated, '1. First reason.\n2. Second reason.');
+	assert.equal((unipusOptions(questions[1])[0] as HTMLTextAreaElement).value, '');
+});
+
+test('不把讨论框和有未适配子题的页面当作完整练习', () => {
+	assert.equal(unipusQuestionType(page('<textarea></textarea>')), undefined);
+	assert.equal(
+		unipusQuestionType(page('<div class="question-inputbox"><textarea readonly></textarea></div>')),
+		undefined
+	);
+	const root = page(`<div class="reply-wrap">
+		<div class="question-common-abs-reply"><div class="question-common-abs-choice"><div class="option isNotReview">A</div></div></div>
+		<div class="question-common-abs-reply"><div class="unknown-reply"></div></div>
+	</div>`);
+	assert.equal(unipusQuestionType(root), undefined);
 	assert.deepEqual(unipusQuestions(root), [root]);
 });
 
